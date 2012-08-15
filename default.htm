@@ -1,0 +1,217 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <title>live.xsockets.net | Example 3</title>
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js" type="text/javascript"></script>
+    <script type="text/javascript" src="js/simpleChat.js"></script>
+    <link href="css/bootstrap.min.css" rel="stylesheet" type="text/css" />
+    <link href="css/bootstrap-responsive.min.css" rel="stylesheet" type="text/css" />
+
+    <script src="js/bootstrap.min.js" type="text/javascript"></script>
+    <script src="http://live.xsockets.net/scripts/json2.min.js" type="text/javascript"></script>
+    <script src="http://live.xsockets.net/scripts/jquery-1.7.2.min.js" type="text/javascript"></script>
+    <script src="http://live.xsockets.net/scripts/jXSockets.fallback.crossdomain.0.9.min.js"
+        type="text/javascript"></script>
+    <script src="http://live.xsockets.net/Scripts/jXSockets.1.0.6.beta.js" type="text/javascript"></script>
+    <script type="text/javascript">
+
+
+        var simpleChat = new SimpleChat();
+
+        // Add "event dispatchers"
+        simpleChat.dispatcher("user", function (user) {
+            simpleChat.User.Entity = user;
+            $("#nickName").val(user.JSON.NickName);
+            $("#tagLine").val(user.JSON.TagLine);
+        });
+        simpleChat.Events["message"] = function (messages) {
+
+            $("<p><strong></strong> (<date></date>):<br/><span/></p><hr/>").
+                addClass("post").find("span").text(messages.JSON.Text).end()
+                .find("strong").text(messages.JSON.NickName).end().find("date").text(messages.JSON.TimeStamp).end()
+                .prependTo("#conversation");
+        };
+        // Set the live.xsockets.net api-key
+        var settings = {
+            apikey: 'e8c17cd7-ef8b-4870-96eb-b0181ec225af' //'7b037feb-11fa-40af-9693-86bd098ce7ca' // '55c9172a-e74e-4053-8bdb-9a4e00885118'
+        };
+        //xsocketslive.cloudsimpleChat.net:10101
+        var ws = new jXSockets.WebSocket("ws://xsocketslive.cloudapp.net:10101/XSockets.Live.Realtime.API", "XSockets.Live.Realtime.API", settings);
+
+        ws.bind(XSockets.Events.open, function (msg) {
+            simpleChat.User.XNode = msg;
+            ws.bind("sink.create", function (args) {
+
+                // If the args created is an user save to localStorage
+                if (args.Type == "user") {
+                    simpleChat.setLocalStorage(args);
+                    simpleChat.Events[args.Type](args);
+                } else { // This is not a user, then it's a "post" (Message)
+                    ws.trigger("simpleChat.message", args); // pass the "args" created to all subscribers.
+                }
+            });
+            // Establish a subscriber for new messages
+            ws.bind("simpleChat.message", function (args) {
+                simpleChat.Events["message"](args); // Dispatch to event listner
+            });
+            // Establish a subscriber for the list of onliners ( Who is online when i enter )
+            ws.bind("simpleChat.onliners", function (args) {
+                // Create an message and tell everybody who u are.
+                ws.trigger("simpleChat.onliner", { User: simpleChat.User.Entity.JSON, XNode: simpleChat.User.XNode.ClientGuid });
+            });
+            // Enstablish a subscriber for new "onliners", will fire when a new "onliner" enters
+            ws.bind("simpleChat.onliner", function (onliner) {
+                $("<li><a></a></li>").find("a").data("XNode", onliner.XNode).text(onliner.User.NickName).end().appendTo("#onliners");
+            });
+
+            // Etablish a subscriber that fires when a onliners leaves
+            ws.bind("clientdisconnect", function (onliner) {
+
+                $.each($.map($("#onliners a"), function (el, i) { if ($(el).data().XNode == onliner.ClientGuid) return $(el) }),
+                    function () {
+                        $(this).remove();
+                    });
+            });
+
+
+            // Subscribtion that fires when an args is updated
+            ws.bind("sink.update", function (args) {
+                simpleChat.Events[args.Type](args);
+                simpleChat.setLocalStorage(args);
+            });
+
+            // Subscribtion that fires when an data is retrived from the storage
+            ws.bind("sink.read", function (argss) {
+                $.each(argss, function () {
+                    simpleChat.Events[this.Type](this); // Fire the appropiate event
+                });
+            });
+            simpleChat.Initialize(function (user) {
+                simpleChat.User.Entity = user;
+                if (simpleChat.User.Entity !== null) { // There is track of the user,ask for that specific "args"
+                    ws.trigger("Sink.read", { key: simpleChat.User.Entity.Key });
+                }
+            });
+        });
+
+        $(function () {
+            // Initialize the "Simple Chat App"
+            $("#start").on("click", function (evt) {
+
+                var nickName = $("#nickName").val();
+
+                if (nickName === "") {
+                    return false;
+                }
+
+                evt.preventDefault();
+                var user = new simpleChat.Message("user",
+                    {
+                        NickName: nickName,
+                        TagLine: $("#tagLine").val()
+                    });
+
+                if (simpleChat.getLocalStorage() !== null) {
+                    ws.trigger("sink.update", { Key: simpleChat.User.Entity.Key, JSON: user.JSON });
+                } else {
+                    ws.trigger("sink.create", user); // Send the user args to the storage.
+                }
+                $("#logon").hide(function () {
+                    $("#messages,.onliners").show();
+                    ws.trigger("Sink.read", { model: 'message', take: 100 }); // Load the 100 latest messages from the storge
+
+                    ws.trigger("simpleChat.onliners", {}); // Tell others that i "join" by publishing a new event
+                });
+            });
+
+            $("#message").on("keypress", function (evt) {
+
+                if (evt.which == 13) {
+
+                    var date = new Date();
+                    var post = new simpleChat.Message("message",
+                        {
+                            Text: $("#message").val(),
+                            TimeStamp: date.toGMTString(),
+                            NickName: simpleChat.User.Entity.JSON.NickName,
+                            Client: simpleChat.User.Entity.Key
+                        });
+                    ws.trigger("Sink.Create", post);
+                }
+            });
+        });
+    </script>
+
+    <style type="text/css">
+        .onliners {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="navbar">
+            <div class="navbar-inner">
+                <div class="container">
+                    <ul class="nav">
+                        <li class="active"><a href="#">Home</a> </li>
+                    </ul>
+                    <ul class="nav pull-right ">
+                        <li class="pull-right"><a href="http://xfiddle.net" id="goodbye">Try XFiddle.NET</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="span10">
+                <div id="messages" style="display: none;">
+                    <div class="form-horizontal well">
+                        <div>
+                            <label for="message">
+                                Message:</label>
+                            <input type="text" id="message" placeholder="Wanna say somethig?" class="input-xxlarge" />
+                        </div>
+                    </div>
+                    <pre class="pre-scrollable" id="conversation">
+                    </pre>
+                </div>
+                <div id="logon">
+                    <div class="form-horizontal well">
+                        <fieldset class="controls">
+                            <legend>Sign in and chat..</legend>
+                            <div class="control-group">
+                                <label for="nickName" class="control-label">
+                                    Nickname:</label>
+                                <input placeholder="Choose a nickname..." type="text" id="nickName" name="nickName" class="input-xxlarge" />
+                            </div>
+                            <div class="control-group">
+                                <label for="tagLine">
+                                    Tagline:</label>
+                                <input type="text" id="tagLine" placeholder="Whats your tag line?" name="tagLine" class="input-xxlarge" />
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary pull-right btn-large" id="start">
+                                    Sign in!</button>
+                            </div>
+                        </fieldset>
+                    </div>
+                </div>
+            </div>
+            <div class="span2">
+                <div class="onliners">
+                    <h3>Onliners</h3>
+                    <ul class="nav-list nav" id="onliners">
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <hr />
+
+        <footer>
+            <p class="pull-right">A realtime example just using JavaScript and XSockets.NET Azure Service - <a href="http://live.xsockets.net">live.xsockets.net</a></p>
+        </footer>
+    </div>
+</body>
+</html>
